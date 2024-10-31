@@ -34,8 +34,10 @@ use Statamic\Exceptions\FileExtensionMismatch;
 use Statamic\Facades;
 use Statamic\Facades\AssetContainer as AssetContainerAPI;
 use Statamic\Facades\Blink;
+use Statamic\Facades\File;
 use Statamic\Facades\Image;
 use Statamic\Facades\Path;
+use Statamic\Facades\Stache;
 use Statamic\Facades\URL;
 use Statamic\Facades\YAML;
 use Statamic\GraphQL\ResolvesValues;
@@ -50,15 +52,19 @@ use Symfony\Component\Mime\MimeTypes;
 
 class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, ContainsQueryableValues, ResolvesValuesContract, SearchableContract
 {
-    use ContainsData, FluentlyGetsAndSets, HasAugmentedInstance, HasDirtyState,
+    use ContainsData,
+        FluentlyGetsAndSets,
+        HasAugmentedInstance,
+        HasDirtyState,
         Searchable,
-        TracksQueriedColumns, TracksQueriedRelations {
-            set as traitSet;
-            get as traitGet;
-            remove as traitRemove;
-            data as traitData;
-            merge as traitMerge;
-        }
+        TracksQueriedColumns,
+        TracksQueriedRelations {
+        set as traitSet;
+        get as traitGet;
+        remove as traitRemove;
+        data as traitData;
+        merge as traitMerge;
+    }
     use ResolvesValues {
         resolveGqlValue as traitResolveGqlValue;
     }
@@ -121,7 +127,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
             throw new \Exception('Asset IDs cannot be set directly.');
         }
 
-        return $this->container->id().'::'.$this->path();
+        return $this->container->id() . '::' . $this->path();
     }
 
     public function reference()
@@ -248,8 +254,14 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
         }
 
         return $this->meta = Cache::rememberForever($this->metaCacheKey(), function () {
-            if ($contents = $this->disk()->get($path = $this->metaPath())) {
-                return YAML::file($path)->parse($contents);
+            if (config('statamic.assets.meta_as_content')) {
+                if ($contents = File::get($path = $this->metaPath())) {
+                    return YAML::file($path)->parse($contents);
+                }
+            } else {
+                if ($contents = $this->disk()->get($path = $this->metaPath())) {
+                    return YAML::file($path)->parse($contents);
+                }
             }
 
             $this->writeMeta($meta = $this->generateMeta());
@@ -295,13 +307,20 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
 
     public function metaPath()
     {
-        $path = dirname($this->path()).'/.meta/'.$this->basename().'.yaml';
+        if (config('statamic.assets.meta_as_content')) {
+            return Path::resolve(Stache::store('assets')->directory() . '/' . $this->container()->handle() . '/' . dirname($this->path()) . '/' . $this->basename() . '.yaml');
+        }
 
+        $path = dirname($this->path()) . '/.meta/' . $this->basename() . '.yaml';
         return (string) Str::of($path)->replaceFirst('./', '')->ltrim('/');
     }
 
     protected function metaExists()
     {
+        if (config('statamic.assets.meta_as_content')) {
+            return File::exists($this->metaPath());
+        }
+
         return $this->container()->metaFiles()->contains($this->metaPath());
     }
 
@@ -311,12 +330,17 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
 
         $contents = YAML::dump($meta);
 
-        $this->disk()->put($this->metaPath(), $contents);
+        if (config('statamic.assets.meta_as_content')) {
+            File::makeDirectory(dirname($this->metaPath()), 0755, true);
+            File::put($this->metaPath(), $contents);
+        } else {
+            $this->disk()->put($this->metaPath(), $contents);
+        }
     }
 
     public function metaCacheKey()
     {
-        return 'asset-meta-'.$this->id();
+        return 'asset-meta-' . $this->id();
     }
 
     /**
@@ -383,7 +407,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
      */
     public function resolvedPath()
     {
-        return Path::tidy($this->container()->diskPath().'/'.$this->path());
+        return Path::tidy($this->container()->diskPath() . '/' . $this->path());
     }
 
     /**
@@ -467,16 +491,33 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
     public function isPreviewable()
     {
         return $this->extensionIsOneOf([
-            'doc', 'docx', 'pages', 'txt',
-            'ai', 'psd', 'eps', 'ps',
-            'css', 'html', 'php', 'c', 'cpp', 'h', 'hpp', 'js',
-            'ppt', 'pptx',
+            'doc',
+            'docx',
+            'pages',
+            'txt',
+            'ai',
+            'psd',
+            'eps',
+            'ps',
+            'css',
+            'html',
+            'php',
+            'c',
+            'cpp',
+            'h',
+            'hpp',
+            'js',
+            'ppt',
+            'pptx',
             'flv',
             'tiff',
             'ttf',
-            'dxf', 'xps',
-            'zip', 'rar',
-            'xls', 'xlsx',
+            'dxf',
+            'xps',
+            'zip',
+            'rar',
+            'xls',
+            'xlsx',
             'pdf',
         ]);
     }
@@ -519,9 +560,9 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
     public function isMedia()
     {
         return $this->isImage()
-                || $this->isSvg()
-                || $this->isVideo()
-                || $this->isAudio();
+            || $this->isSvg()
+            || $this->isVideo()
+            || $this->isAudio();
     }
 
     /**
@@ -745,7 +786,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
         $filename = Uploader::getSafeFilename($filename ?: $this->filename());
         $oldPath = $this->path();
         $oldMetaPath = $this->metaPath();
-        $newPath = Str::removeLeft(Path::tidy($folder.'/'.$filename.'.'.pathinfo($oldPath, PATHINFO_EXTENSION)), '/');
+        $newPath = Str::removeLeft(Path::tidy($folder . '/' . $filename . '.' . pathinfo($oldPath, PATHINFO_EXTENSION)), '/');
 
         if ($oldPath === $newPath) {
             return $this;
@@ -756,7 +797,11 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
         $this->path($newPath);
         $this->save();
 
-        $this->disk()->rename($oldMetaPath, $this->metaPath());
+        if (config('statamic.assets.meta_as_content')) {
+            File::move($oldMetaPath, $this->metaPath());
+        } else {
+            $this->disk()->rename($oldMetaPath, $this->metaPath());
+        }
 
         return $this;
     }
@@ -992,7 +1037,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
      */
     public function editUrl()
     {
-        return cp_route('assets.browse.edit', $this->container()->handle().'/'.$this->path());
+        return cp_route('assets.browse.edit', $this->container()->handle() . '/' . $this->path());
     }
 
     public function apiUrl()
@@ -1037,13 +1082,13 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
     {
         $extension = pathinfo($this->path(), PATHINFO_EXTENSION);
         $suffix = $count ? "-{$count}" : '';
-        $newPath = Str::removeLeft(Path::tidy($folder.'/'.$filename.$suffix.'.'.$extension), '/');
+        $newPath = Str::removeLeft(Path::tidy($folder . '/' . $filename . $suffix . '.' . $extension), '/');
 
         if ($this->disk()->exists($newPath)) {
             return $this->ensureUniqueFilename($folder, $filename, $count + 1);
         }
 
-        return $filename.$suffix;
+        return $filename . $suffix;
     }
 
     public static function __callStatic($method, $parameters)
@@ -1116,7 +1161,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
         }
 
         $cpPresets = config('statamic.cp.enabled') ? [
-            'cp_thumbnail_small_'.$this->orientation(),
+            'cp_thumbnail_small_' . $this->orientation(),
         ] : [];
 
         return array_merge($this->container->warmPresets(), $cpPresets);

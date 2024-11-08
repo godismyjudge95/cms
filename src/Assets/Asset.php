@@ -529,7 +529,7 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
      */
     public function isImage()
     {
-        return $this->extensionIsOneOf(['jpg', 'jpeg', 'png', 'gif', 'webp']);
+        return $this->extensionIsOneOf(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif']);
     }
 
     /**
@@ -1116,12 +1116,12 @@ class Asset implements Arrayable, ArrayAccess, AssetContract, Augmentable, Conta
         return $this->selectedQueryRelations;
     }
 
-    private function hasDimensions()
+    public function hasDimensions()
     {
         return $this->isImage() || $this->isSvg() || $this->isVideo();
     }
 
-    private function hasDuration()
+    public function hasDuration()
     {
         return $this->isAudio() || $this->isVideo();
     }
